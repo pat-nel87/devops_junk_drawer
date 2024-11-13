@@ -1,0 +1,64 @@
+name: IaC Environment Management
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to target (e.g., development, qa)'
+        required: true
+        type: choice
+        options:
+          - development
+          - qa
+      operation:
+        description: 'Operation to perform (plan or apply)'
+        required: true
+        type: choice
+        options:
+          - plan
+          - apply
+
+jobs:
+  iac:
+    runs-on: self-hosted
+    environment: ${{ github.event.inputs.environment }}
+    env:
+      ARM_USE_MSI: 'true'
+      ARM_SUBSCRIPTION_ID: '<YOUR_SUBSCRIPTION_ID>'
+      ARM_CLIENT_ID: '<YOUR_USER_MANAGED_IDENTITY_CLIENT_ID>'
+      ARM_TENANT_ID: '<YOUR_TENANT_ID>'
+      
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: '1.5.0'
+
+      - name: Initialize Terraform
+        working-directory: environments/${{ github.event.inputs.environment }}
+        run: terraform init
+
+      - name: Select Terraform Workspace
+        working-directory: environments/${{ github.event.inputs.environment }}
+        run: terraform workspace select ${{ github.event.inputs.environment }} || terraform workspace new ${{ github.event.inputs.environment }}
+
+      - name: Terraform Plan
+        if: ${{ github.event.inputs.operation == 'plan' }}
+        working-directory: environments/${{ github.event.inputs.environment }}
+        run: |
+          terraform plan -out=tfplan
+          terraform show -no-color tfplan > plan.txt
+        - name: Upload plan file
+        if: ${{ github.event.inputs.operation == 'plan' }}
+        uses: actions/upload-artifact@v3
+        with:
+          name: plan-${{ github.event.inputs.environment }}
+          path: environments/${{ github.event.inputs.environment }}/plan.txt
+
+      - name: Terraform Apply
+        if: ${{ github.event.inputs.operation == 'apply' }}
+        working-directory: environments/${{ github.event.inputs.environment }}
+        run: terraform apply -auto-approve tfplan
