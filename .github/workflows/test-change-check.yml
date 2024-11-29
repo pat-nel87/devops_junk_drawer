@@ -1,0 +1,32 @@
+name: Test Custom Action
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Create Test Folders and Files
+        run: |
+          mkdir -p folder1 folder2
+          echo "Test file in folder1" > folder1/test1.txt
+          echo "Test file in folder2" > folder2/test2.txt
+
+      - name: Use Custom Action
+        id: check_changes
+        uses: github-hacktions/change_check@main
+        with:
+          folders: "folder1,folder2"
+
+      - name: Output Result
+        run: |
+          echo "Changes Detected: ${{ steps.check_changes.outputs.changes_detected }}"
+
