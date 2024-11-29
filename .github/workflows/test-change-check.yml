@@ -21,12 +21,12 @@ jobs:
           echo "Test file in folder2" > folder2/test2.txt
 
       - name: Use Custom Action
-        id: check_changes
+        id: check-changes
         uses: github-hacktions/change_check@main
         with:
           folders: "folder1,folder2"
 
       - name: Output Result
         run: |
-          echo "Changes Detected: ${{ steps.check_changes.outputs.changes_detected }}"
+          echo "Changes Detected: ${{ steps.check-changes.outputs.changes_detected }}"
 
