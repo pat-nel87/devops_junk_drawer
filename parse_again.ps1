@@ -3,25 +3,14 @@ $logFilePath = "C:\Logs\application.log"  # Path to the XML log file
 $outputJsonFile = "C:\Logs\processed_logs.json"  # Path to the JSON output file
 $trackingFile = "C:\Logs\last_processed.txt"  # File to store the last processed LogCreationTime
 
-# Function to extract the first <ACVS_T> block
+# Function to extract the first <ACVS_T> block using regex
 function Get-FirstLogEntry ($filePath) {
-    $xmlBlock = ""  # Initialize variable for the block
-    $insideBlock = $false  # Track if inside <ACVS_T>
+    # Read the entire log file content
+    $fileContent = Get-Content -Path $filePath -Raw
 
-    Get-Content -Path $filePath | ForEach-Object {
-        # Detect the start of the block
-        if ($_ -match "<ACVS_T>") {
-            $insideBlock = $true
-            $xmlBlock = $_  # Start capturing the block
-        }
-        elseif ($insideBlock) {
-            $xmlBlock += "`n" + $_  # Append lines to the block
-
-            # Detect the end of the block
-            if ($_ -match "</ACVS_T>") {
-                return "<Root>$xmlBlock</Root>"  # Wrap in a root element and return
-            }
-        }
+    # Extract the first <ACVS_T>...</ACVS_T> block using regex
+    if ($fileContent -match "<ACVS_T>.*?</ACVS_T>") {
+        return "<Root>$Matches[0]</Root>"  # Wrap in a root node and return
     }
 
     return $null  # Return null if no block is found
@@ -82,3 +71,4 @@ if ($latestEntry) {
 } else {
     Write-Host "No <ACVS_T> block found in the file."
 }
+
