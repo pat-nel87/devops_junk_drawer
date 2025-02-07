@@ -1,0 +1,25 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "secrets-test.fullname" . }}
+  labels:
+    app: {{ include "secrets-test.name" . }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: {{ include "secrets-test.name" . }}
+  template:
+    metadata:
+      labels:
+        app: {{ include "secrets-test.name" . }}
+    spec:
+      containers:
+        - name: {{ include "secrets-test.name" . }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: {{ toJson .Values.pod.command }}
+          volumeMounts:
+            {{- toYaml .Values.pod.volumeMounts | nindent 12 }}
+      volumes:
+        {{- toYaml .Values.pod.volumes | nindent 8 }}
