@@ -1,0 +1,6 @@
+apiVersion: v2
+name: secrets-test
+description: A simple chart to test Secrets Store CSI driver with Azure Key Vault.
+type: application
+version: 0.1.0
+appVersion: "1.0"
