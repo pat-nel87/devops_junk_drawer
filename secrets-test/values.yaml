@@ -1,0 +1,20 @@
+# Default values for secrets-test.
+image:
+  repository: busybox
+  tag: "latest"
+  pullPolicy: IfNotPresent
+
+pod:
+  command: ["sleep", "3600"]
+  # Define the volume mount for the CSI driver:
+  volumeMounts:
+    - name: secrets-store-inline
+      mountPath: /mnt/secrets
+  # Define the volume that references the SecretProviderClass:
+  volumes:
+    - name: secrets-store-inline
+      csi:
+        driver: secrets-store.csi.k8s.io
+        readOnly: true
+        volumeAttributes:
+          secretProviderClass: "azure-kv"  # Replace with your SecretProviderClass name
