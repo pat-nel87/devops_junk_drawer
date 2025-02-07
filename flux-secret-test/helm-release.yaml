@@ -1,0 +1,32 @@
+apiVersion: helm.toolkit.fluxcd.io/v2beta1
+kind: HelmRelease
+metadata:
+  name: secrets-test
+  namespace: cluster-config
+spec:
+  interval: 1m0s
+  chart:
+    spec:
+      chart: secrets-test
+      version: "0.1.0"
+      sourceRef:
+        kind: GitRepository
+        name: my-gitops-repo      # This is the name of your GitRepository resource
+        namespace: flux-system    # Typically the namespace where your GitRepository resource is deployed
+  values:
+    image:
+      repository: busybox
+      tag: "latest"
+      pullPolicy: IfNotPresent
+    pod:
+      command: ["sleep", "3600"]
+      volumeMounts:
+        - name: secrets-store-inline
+          mountPath: /mnt/secrets
+      volumes:
+        - name: secrets-store-inline
+          csi:
+            driver: secrets-store.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: "azure-kv"
