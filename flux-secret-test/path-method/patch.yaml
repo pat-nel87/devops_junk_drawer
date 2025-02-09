@@ -1,0 +1,6 @@
+- op: add
+  path: /spec/values/global
+  value:
+    namespace: "qa"
+    imageRegistry: "myregistry.azurecr.io"
+    commonLabel: "shared-value"
