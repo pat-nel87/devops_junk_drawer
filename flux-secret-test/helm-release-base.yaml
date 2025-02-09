@@ -1,0 +1,11 @@
+apiVersion: helm.toolkit.fluxcd.io/v2beta1
+kind: HelmRelease
+metadata:
+  name: my-app    # This name will be merged with the overlay—make sure the names match in the overlay!
+spec:
+  values:
+    global:
+      replicaCount: 2
+      imagePullPolicy: IfNotPresent
+    logging:
+      level: info
