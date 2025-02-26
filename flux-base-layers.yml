@@ -1,3 +1,13 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base/values.yaml   # Inheriting base values
+  - values-dev.yaml          # Overrides for dev environment
+  - helmrelease-busybox.yaml # The HelmRelease
+
+
+
+
 apiVersion: v1
 kind: ConfigMap
 metadata:
