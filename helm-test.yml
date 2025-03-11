@@ -1,0 +1,25 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: "{{ .Release.Name }}-test-connection"
+  labels:
+    helm.sh/hook: test
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: test
+          image: curlimages/curl:latest
+          command:
+            - /bin/sh
+            - -c
+            - |
+              RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" http://{{ .Release.Name }}-service:80)
+              if [ "$RESPONSE" -eq 200 ]; then
+                echo "Success: Received 200 OK"
+                exit 0
+              else
+                echo "Failure: Received HTTP $RESPONSE"
+                exit 1
+              fi
