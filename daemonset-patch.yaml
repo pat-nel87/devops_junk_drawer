@@ -1,0 +1,37 @@
+apiVersion: helm.toolkit.fluxcd.io/v2beta1
+kind: HelmRelease
+metadata:
+  name: crowdstrike-falcon
+  namespace: falcon-system
+spec:
+  interval: 10m
+  chart:
+    spec:
+      chart: falcon-sensor
+      version: "x.y.z"  # your Falcon Helm chart version
+      sourceRef:
+        kind: HelmRepository
+        name: crowdstrike
+  postRenderers:
+    - kustomize:
+        patches:
+          - target:
+              kind: DaemonSet
+              name: falcon-sensor  # exactly as above
+            patch: |-
+              apiVersion: apps/v1
+              kind: DaemonSet
+              metadata:
+                name: falcon-sensor
+              spec:
+                template:
+                  spec:
+                    containers:
+                      - name: falcon-container-name
+                        volumeMounts:
+                          - name: falcon-extra-volume
+                            mountPath: /desired/path
+                    volumes:
+                      - name: falcon-extra-volume
+                        hostPath:
+                          path: /path/on/host
