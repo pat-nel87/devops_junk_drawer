@@ -1,0 +1,28 @@
+name: "Flux Helpers Image Bumper"
+description: "Update image tags in FluxCD HelmRelease files using a Dockerized CLI"
+author: "Your Team <you@example.com>"
+branding:
+  icon: "refresh-ccw"
+  color: "blue"
+
+inputs:
+  file:
+    description: "Path to HelmRelease YAML file"
+    required: true
+  set:
+    description: "One or more repo=tag updates"
+    required: true
+  dry-run:
+    description: "Preview only (true/false)"
+    required: false
+    default: "false"
+
+runs:
+  using: "docker"
+  image: "your-acr-name.azurecr.io/flux-helpers:latest"
+  args:
+    - bump
+    - --file
+    - ${{ inputs.file }}
+    - ${{ inputs.set }}
+    - --dry-run=${{ inputs.dry-run }}
