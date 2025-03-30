@@ -45,3 +45,9 @@ spec:
         image: <registry-url>/<image-name>:<tag>
       imagePullSecrets:
       - name: <secret-name>
+
+
+docker run --rm \
+      -v "${{ github.workspace }}:/workdir" \
+      your-acr.azurecr.io/flux-helpers:latest \
+      bump --file "/workdir/$FILE" $SET_ARGS --dry-run="$DRY_RUN"
