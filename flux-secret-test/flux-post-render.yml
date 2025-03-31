@@ -1,0 +1,27 @@
+apiVersion: helm.toolkit.fluxcd.io/v2beta1
+kind: HelmRelease
+metadata:
+  name: my-app
+  namespace: default
+spec:
+  interval: 5m
+  chart:
+    spec:
+      chart: my-chart
+      version: 1.2.3
+      sourceRef:
+        kind: HelmRepository
+        name: my-repo
+        namespace: flux-system
+  values:
+    # your values here
+  postRenderers:
+    - kustomize:
+        patchesStrategicMerge:
+          - |
+            apiVersion: v1
+            kind: Service
+            metadata:
+              name: original-service-name
+            metadata:
+              name: custom-service-name
