@@ -1,0 +1,13 @@
+jobs:
+  get-actor-name:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get full name of actor
+        id: actor-name
+        run: |
+          response=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+                         -H "Accept: application/vnd.github+json" \
+                         https://api.github.com/users/${{ github.actor }})
+          full_name=$(echo "$response" | jq -r '.name // "Name not set"')
+          echo "Full name: $full_name"
+          echo "full_name=$full_name" >> $GITHUB_OUTPUT
