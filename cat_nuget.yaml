@@ -1,0 +1,16 @@
+- name: Setup NuGet authentication
+  run: |
+    cat <<EOF > nuget.config
+    <?xml version="1.0" encoding="utf-8"?>
+    <configuration>
+      <packageSources>
+        <add key="github" value="https://nuget.pkg.github.com/YOUR_ORG/index.json" />
+      </packageSources>
+      <packageSourceCredentials>
+        <github>
+          <add key="Username" value="x-access-token" />
+          <add key="ClearTextPassword" value="${{ secrets.GITHUB_TOKEN }}" />
+        </github>
+      </packageSourceCredentials>
+    </configuration>
+    EOF
