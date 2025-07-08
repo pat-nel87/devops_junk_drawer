@@ -1,0 +1,41 @@
+name: Validate ConfigMaps
+
+on:
+  pull_request:
+    branches: [develop]
+    paths:
+      - '**/config.yaml'
+
+jobs:
+  validate-configmaps:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate changed config.yaml files
+        run: |
+          set -e
+          git fetch origin develop
+
+          CONFIG_DIRS=$(git diff --name-only origin/develop...HEAD \
+            | grep -E 'config\.yaml$' \
+            | xargs -n1 dirname \
+            | sort -u)
+
+          if [ -z "$CONFIG_DIRS" ]; then
+            echo "✅ No config.yaml changes detected."
+            exit 0
+          fi
+
+          for dir in $CONFIG_DIRS; do
+            echo "🔍 Validating $dir"
+            kustomize build "$dir" | kubectl apply --dry-run=client -f - || {
+              echo "❌ Validation failed in $dir"
+              exit 1
+            }
+          done
+
+          echo "✅ All config.yaml changes validated successfully."
