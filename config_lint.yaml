@@ -39,3 +39,11 @@ jobs:
           done
 
           echo "✅ All config.yaml changes validated successfully."
+
+          for file in $(git diff --name-only origin/develop...HEAD | grep 'config.yaml'); do
+            echo "🔍 Validating $file"
+            kubectl apply --dry-run=client -f "$file" || {
+              echo "❌ Validation failed for $file"
+              exit 1
+            }
+          done
