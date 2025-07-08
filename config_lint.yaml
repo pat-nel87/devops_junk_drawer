@@ -47,3 +47,15 @@ jobs:
               exit 1
             }
           done
+
+
+- name: Download kubeconform
+  run: |
+    mkdir -p ./bin
+    curl -sL https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64.tar.gz \
+      | tar xz -C ./bin
+    chmod +x ./bin/kubeconform
+    echo "$PWD/bin" >> $GITHUB_PATH
+
+
+          
