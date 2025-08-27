@@ -1,0 +1,79 @@
+# Email Provider Configuration
+apiVersion: notification.toolkit.fluxcd.io/v1beta1
+kind: Provider
+metadata:
+  name: email-provider
+  namespace: flux-system
+spec:
+  type: generic-hmac
+  address: "https://your-email-webhook-service/send"
+  secretRef:
+    name: email-credentials
+---
+# Secret for email credentials (create this separately)
+apiVersion: v1
+kind: Secret
+metadata:
+  name: email-credentials
+  namespace: flux-system
+type: Opaque
+stringData:
+  token: "your-smtp-service-token"  # Or API key for email service
+---
+# Alert for Deployment Failures
+apiVersion: notification.toolkit.fluxcd.io/v1beta1
+kind: Alert
+metadata:
+  name: deployment-failure-alert
+  namespace: flux-system
+spec:
+  providerRef:
+    name: email-provider
+  eventSeverity: error
+  eventSources:
+    - kind: Kustomization
+      name: '*'
+    - kind: HelmRelease
+      name: '*'
+  summary: "🚨 FluxCD Deployment Failed in AKS Cluster"
+  inclusionList:
+    - ".*failed.*"
+    - ".*error.*"
+---
+# Alert for Successful Deployments
+apiVersion: notification.toolkit.fluxcd.io/v1beta1
+kind: Alert
+metadata:
+  name: deployment-success-alert
+  namespace: flux-system
+spec:
+  providerRef:
+    name: email-provider
+  eventSeverity: info
+  eventSources:
+    - kind: Kustomization
+      name: '*'
+    - kind: HelmRelease
+      name: '*'
+  summary: "✅ FluxCD Deployment Successful in AKS Cluster"
+  inclusionList:
+    - ".*succeeded.*"
+    - ".*applied.*"
+---
+# Alert for Drift Detection
+apiVersion: notification.toolkit.fluxcd.io/v1beta1
+kind: Alert
+metadata:
+  name: drift-detection-alert
+  namespace: flux-system
+spec:
+  providerRef:
+    name: email-provider
+  eventSeverity: warn
+  eventSources:
+    - kind: Kustomization
+      name: '*'
+  summary: "⚠️ Configuration Drift Detected in AKS Cluster"
+  inclusionList:
+    - ".*drift.*"
+    - ".*diverged.*"
