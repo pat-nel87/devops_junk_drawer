@@ -1,0 +1,31 @@
+name: Auto-merge with GitHub Script
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  auto-merge:
+    runs-on: ubuntu-latest
+    if: |
+      github.actor == 'your-bot-name' && 
+      contains(github.event.pull_request.title, 'your-title-match')
+    steps:
+      - name: Merge PR with GitHub Script
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.ADMIN_PAT_TOKEN }}
+          script: |
+            try {
+              const result = await github.rest.pulls.merge({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: context.issue.number,
+                commit_title: `Auto-merge: ${context.payload.pull_request.title}`,
+                merge_method: 'squash'
+              });
+              console.log('PR merged successfully:', result.data.sha);
+            } catch (error) {
+              console.error('Merge failed:', error.message);
+              core.setFailed(`Failed to merge PR: ${error.message}`);
+            }
