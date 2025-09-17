@@ -1,0 +1,58 @@
+name: Auto-approve with complex conditions
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  auto-approve:
+    runs-on: ubuntu-latest
+    if: |
+      (
+        github.actor == 'your-bot-name' && 
+        (
+          startsWith(github.event.pull_request.title, '[AUTO]') ||
+          contains(github.event.pull_request.title, 'Automated Update') ||
+          endsWith(github.event.pull_request.title, '[bot-generated]')
+        ) &&
+        github.event.pull_request.draft == false &&
+        !contains(github.event.pull_request.labels.*.name, 'manual-review')
+      ) ||
+      (
+        github.actor == 'dependabot[bot]' && 
+        startsWith(github.event.pull_request.title, 'Bump') &&
+        contains(github.event.pull_request.body, 'security')
+      )
+    steps:
+      - name: Auto-approve PR
+        uses: hmarr/auto-approve-action@v3
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          review-message: "Auto-approved: Bot PR with matching title pattern"
+
+  auto-merge:
+    runs-on: ubuntu-latest
+    needs: auto-approve
+    if: |
+      (
+        github.actor == 'your-bot-name' && 
+        (
+          startsWith(github.event.pull_request.title, '[AUTO]') ||
+          contains(github.event.pull_request.title, 'Automated Update') ||
+          endsWith(github.event.pull_request.title, '[bot-generated]')
+        ) &&
+        github.event.pull_request.draft == false &&
+        !contains(github.event.pull_request.labels.*.name, 'manual-review')
+      ) ||
+      (
+        github.actor == 'dependabot[bot]' && 
+        startsWith(github.event.pull_request.title, 'Bump') &&
+        contains(github.event.pull_request.body, 'security')
+      )
+    steps:
+      - name: Enable auto-merge
+        uses: peter-evans/enable-pull-request-automerge@v3
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          pull-request-number: ${{ github.event.pull_request.number }}
+          merge-method: squash
