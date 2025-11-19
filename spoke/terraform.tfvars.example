@@ -1,0 +1,130 @@
+# ==============================================================================
+# Spoke Network Configuration Example
+# Copy this file to terraform.tfvars and customize for your environment
+# ==============================================================================
+# IMPORTANT: Get hub values by running: cd ../hub && terraform output spoke_integration_info
+# ==============================================================================
+
+# ==============================================================================
+# Basic Configuration
+# ==============================================================================
+
+location              = "eastus"  # MUST match hub location
+resource_group_name   = "rg-spoke1-networking"
+create_resource_group = true
+
+# ==============================================================================
+# Spoke VNet Configuration
+# ==============================================================================
+
+spoke_vnet_name         = "vnet-spoke1"
+spoke_vnet_address_space = ["10.1.0.0/16"]  # Must NOT overlap with hub or other spokes
+
+# Define subnets in the spoke VNet
+spoke_subnets = {
+  "workload" = {
+    address_prefix        = "10.1.0.0/24"
+    associate_route_table = true  # Routes internet traffic through firewall
+  }
+  "data" = {
+    address_prefix        = "10.1.1.0/24"
+    associate_route_table = true
+  }
+  # Example: Private Link subnet (no route table needed)
+  # "privatelink" = {
+  #   address_prefix        = "10.1.2.0/24"
+  #   associate_route_table = false  # Private Link doesn't need firewall routing
+  # }
+}
+
+# ==============================================================================
+# Hub Integration - GET THESE FROM HUB OUTPUT
+# ==============================================================================
+# Run this command to get hub values:
+#   cd ../hub && terraform output -json spoke_integration_info
+# ==============================================================================
+
+# Hub VNet ID (from hub output: hub_vnet_id)
+hub_vnet_id = "/subscriptions/YOUR-SUBSCRIPTION-ID/resourceGroups/rg-hub-networking/providers/Microsoft.Network/virtualNetworks/vnet-hub"
+
+# Hub VNet name (from hub output: hub_vnet_name)
+hub_vnet_name = "vnet-hub"
+
+# Hub resource group (from hub output: resource_group_name)
+hub_resource_group_name = "rg-hub-networking"
+
+# Azure Firewall private IP (from hub output: firewall_private_ip)
+firewall_private_ip = "10.0.1.4"  # Typically the 4th IP in AzureFirewallSubnet
+
+# ==============================================================================
+# VPN Gateway Integration
+# ==============================================================================
+# CRITICAL: Set this correctly if hub has VPN Gateway
+# Get from hub output: has_vpn_gateway
+# ==============================================================================
+
+hub_has_vpn_gateway = false  # Set to true if hub has VPN Gateway deployed
+
+# ==============================================================================
+# VNet Peering Configuration
+# ==============================================================================
+
+create_vnet_peering                  = true
+peering_allow_virtual_network_access = true
+peering_allow_forwarded_traffic      = true  # REQUIRED for firewall routing
+
+# Auto-configured based on hub_has_vpn_gateway if left as null
+peering_use_remote_gateways = null  # Will be true if hub has VPN Gateway
+
+# ==============================================================================
+# Route Table Configuration
+# ==============================================================================
+
+create_route_table   = true
+route_table_name     = "rt-spoke1-to-firewall"
+
+# Auto-configured based on hub_has_vpn_gateway if left as null
+# CRITICAL: This prevents VPN Gateway BGP routes from conflicting with firewall UDR
+disable_bgp_route_propagation = null  # Will be true if hub has VPN Gateway
+
+# Optional: Use hub's default route table instead of creating a new one
+# hub_default_route_table_id = "/subscriptions/YOUR-SUBSCRIPTION-ID/resourceGroups/rg-hub-networking/providers/Microsoft.Network/routeTables/rt-spoke-to-firewall"
+# create_route_table = false  # Set to false if using hub's route table
+
+# ==============================================================================
+# Tagging
+# ==============================================================================
+
+tags = {
+  Environment = "Production"
+  ManagedBy   = "Terraform"
+  Purpose     = "Spoke-Network"
+  Spoke       = "Spoke1"
+  Owner       = "NetworkTeam"
+  CostCenter  = "IT-Infrastructure"
+}
+
+# ==============================================================================
+# Configuration Examples for Different Scenarios
+# ==============================================================================
+
+# ------------------------
+# Scenario 1: Hub WITHOUT VPN Gateway
+# ------------------------
+# hub_has_vpn_gateway           = false
+# peering_use_remote_gateways   = null  # Will be false
+# disable_bgp_route_propagation = null  # Will be false
+
+# ------------------------
+# Scenario 2: Hub WITH VPN Gateway (P2S)
+# ------------------------
+# hub_has_vpn_gateway           = true
+# peering_use_remote_gateways   = null  # Will be true (allows P2S clients to access spoke)
+# disable_bgp_route_propagation = null  # Will be true (prevents route conflicts)
+
+# ------------------------
+# Scenario 3: Using Hub's Default Route Table
+# ------------------------
+# create_route_table              = false
+# hub_default_route_table_id      = "<from hub output>"
+# # No need to set route_table_name or disable_bgp_route_propagation

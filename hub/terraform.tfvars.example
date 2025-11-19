@@ -1,0 +1,145 @@
+# ============================================================================
+# Hub Network Configuration Example
+# Copy this file to terraform.tfvars and customize for your environment
+# ============================================================================
+
+# ============================================================================
+# Basic Configuration
+# ============================================================================
+
+location            = "eastus"
+resource_group_name = "rg-hub-networking"
+create_resource_group = true
+
+# ============================================================================
+# Hub VNet Configuration
+# ============================================================================
+
+hub_vnet_name         = "vnet-hub"
+hub_vnet_address_space = ["10.0.0.0/16"]
+
+# AzureFirewallSubnet configuration (minimum /26, recommended /25)
+firewall_subnet_address_prefix = "10.0.1.0/26"
+
+# Additional subnets in hub (uncomment if needed)
+# additional_hub_subnets = {
+#   "GatewaySubnet" = {
+#     address_prefix = "10.0.0.0/27"
+#   }
+#   "AzureBastionSubnet" = {
+#     address_prefix = "10.0.2.0/27"
+#   }
+# }
+
+# ============================================================================
+# Azure Firewall Configuration
+# ============================================================================
+
+firewall_name     = "azfw-hub"
+firewall_sku_tier = "Standard"  # Options: Basic, Standard, Premium
+
+# Availability zones for 99.99% SLA (remove for non-production to save costs)
+firewall_zones = ["1", "2", "3"]
+
+# DNS Configuration
+enable_dns_proxy   = true
+custom_dns_servers = []  # Empty list uses Azure DNS
+
+# Threat Intelligence
+threat_intelligence_mode = "Alert"  # Options: Off, Alert, Deny
+
+# ============================================================================
+# Firewall Rules Configuration
+# ============================================================================
+
+# Source addresses allowed through firewall (spoke VNet ranges and P2S VPN clients)
+allowed_source_addresses = ["10.0.0.0/8", "172.16.0.0/24"]  # Include P2S client pool
+
+# Allow all outbound internet traffic (set to false for restrictive mode)
+allow_all_outbound_internet = true
+
+# If allow_all_outbound_internet is false, specify allowed FQDNs
+# allowed_destination_fqdns = [
+#   "*.microsoft.com",
+#   "*.windows.net",
+#   "*.azure.com",
+#   "*.ubuntu.com",
+#   "*.docker.io"
+# ]
+
+# ============================================================================
+# Public IP Configuration
+# ============================================================================
+
+firewall_public_ip_name = "pip-azfw-hub"
+
+# ============================================================================
+# Route Table Configuration
+# ============================================================================
+
+create_default_route_table   = true
+route_table_name             = "rt-spoke-to-firewall"
+disable_bgp_route_propagation = true  # Set to true when using VPN Gateway to prevent route conflicts
+
+# ============================================================================
+# VPN Gateway Configuration (Point-to-Site with Entra ID)
+# ============================================================================
+
+enable_vpn_gateway = true
+
+# GatewaySubnet configuration (minimum /27, recommended /26 or larger)
+gateway_subnet_address_prefix = "10.0.0.0/27"
+
+# VPN Gateway Settings
+vpn_gateway_name       = "vgw-hub"
+vpn_gateway_sku        = "VpnGw1"  # Options: VpnGw1, VpnGw2, VpnGw3, VpnGw1AZ, VpnGw2AZ, VpnGw3AZ
+vpn_gateway_generation = "Generation1"  # Generation1 or Generation2
+
+# P2S VPN Client Address Pool (must not overlap with hub or spoke VNets)
+p2s_client_address_pool = ["172.16.0.0/24"]
+
+# VPN Authentication (Entra ID / Azure AD)
+vpn_auth_types = ["AAD"]  # Options: ["AAD"], ["Certificate"], ["Radius"], or combination
+vpn_client_protocols = ["OpenVPN"]  # Options: ["OpenVPN"], ["IkeV2"], or both
+
+# Entra ID Configuration (leave null to use defaults)
+# If null, uses current tenant and Azure VPN Client App ID
+aad_tenant_id = null  # Your Azure AD Tenant ID (optional)
+aad_audience  = null  # Azure VPN Client App ID: "41b23e61-6c1e-4545-b367-cd054e0ed4b4" (optional)
+aad_issuer    = null  # Azure AD Issuer URL (optional)
+
+# Advanced VPN Gateway Options
+enable_active_active_vpn   = false  # Requires two public IPs, 99.99% SLA
+vpn_gateway_public_ip_name = "pip-vgw-hub"
+vpn_gateway_zones          = []  # Use ["1","2","3"] for zone-redundant AZ SKUs only
+
+# ============================================================================
+# Optional Features
+# ============================================================================
+
+# Forced Tunneling (for hybrid scenarios with ExpressRoute/VPN)
+enable_forced_tunneling                    = false
+firewall_management_subnet_address_prefix = "10.0.3.0/26"
+
+# NAT Gateway for additional SNAT capacity
+enable_nat_gateway_for_firewall = false
+nat_gateway_public_ip_count     = 1
+
+# ============================================================================
+# Monitoring and Diagnostics
+# ============================================================================
+
+enable_diagnostic_settings = false
+# log_analytics_workspace_id = "/subscriptions/xxxxx/resourceGroups/xxxxx/providers/Microsoft.OperationalInsights/workspaces/xxxxx"
+
+# ============================================================================
+# Tagging
+# ============================================================================
+
+tags = {
+  Environment = "Production"
+  ManagedBy   = "Terraform"
+  Purpose     = "Hub-Firewall"
+  Owner       = "NetworkTeam"
+  CostCenter  = "IT-Infrastructure"
+}
