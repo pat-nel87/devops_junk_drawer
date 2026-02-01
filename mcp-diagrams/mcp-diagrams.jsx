@@ -1,0 +1,377 @@
+import React from 'react';
+import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
+
+mermaid.initialize({ 
+  startOnLoad: true,
+  theme: 'default',
+  securityLevel: 'loose',
+  flowchart: {
+    useMaxWidth: true,
+    htmlLabels: true,
+    curve: 'basis'
+  }
+});
+
+export default function MCPArchitectureDiagrams() {
+  const [activeTab, setActiveTab] = React.useState('overview');
+
+  React.useEffect(() => {
+    mermaid.contentLoaded();
+  }, [activeTab]);
+
+  const diagrams = {
+    overview: `graph TB
+    subgraph "Developer Machine"
+        CD[Claude Desktop<br/>MCP Client]
+        PF[kubectl port-forward<br/>localhost:3000]
+    end
+    
+    subgraph "Azure Kubernetes Service"
+        subgraph "platform-tools namespace"
+            GW[MCP Gateway<br/>Discovery & Routing]
+            SD[Service Discovery<br/>K8s API + Istio]
+        end
+        
+        subgraph "production namespace"
+            subgraph "Payment Service Pod"
+                PS[payment-service<br/>:8080]
+                PSM[MCP Sidecar<br/>:3000]
+                PS -.localhost.-> PSM
+                PSM -.health/metrics.-> PS
+            end
+            
+            subgraph "User Service Pod"
+                US[user-service<br/>:8080]
+                USM[MCP Sidecar<br/>:3000]
+                US -.localhost.-> USM
+                USM -.health/metrics.-> US
+            end
+            
+            subgraph "MQTT Publisher Pod"
+                MP[mqtt-publisher<br/>:8080]
+                MPM[MCP Sidecar<br/>:3000]
+                MP -.localhost.-> MPM
+                MPM -.health/metrics.-> MP
+            end
+            
+            MORE[... 33 more services ...]
+        end
+        
+        subgraph "Istio Service Mesh"
+            ENVOY1[Envoy Sidecar]
+            ENVOY2[Envoy Sidecar]
+            ENVOY3[Envoy Sidecar]
+        end
+        
+        PROM[Prometheus]
+        ISTIO_CP[Istio Control Plane]
+    end
+    
+    CD -->|MCP Protocol| PF
+    PF -->|Port Forward| GW
+    
+    GW -->|Discover Services| SD
+    SD -->|List Services<br/>label: mcp-enabled=true| GW
+    SD -.->|Query Mesh Topology| ISTIO_CP
+    
+    GW -->|Route: payment-service<br/>get_transaction_status| PSM
+    GW -->|Route: user-service<br/>check_postgres_pool| USM
+    GW -->|Route: mqtt-publisher<br/>check_hivemq_connection| MPM
+    
+    PSM -.->|Scrape Metrics| PROM
+    USM -.->|Scrape Metrics| PROM
+    MPM -.->|Scrape Metrics| PROM
+    
+    PSM -.->|Query Envoy Stats| ENVOY1
+    USM -.->|Query Envoy Stats| ENVOY2
+    MPM -.->|Query Envoy Stats| ENVOY3
+    
+    style CD fill:#e1f5ff
+    style GW fill:#fff4e6
+    style PSM fill:#e8f5e9
+    style USM fill:#e8f5e9
+    style MPM fill:#e8f5e9
+    style SD fill:#f3e5f5`,
+
+    sequence: `sequenceDiagram
+    participant Dev as Developer
+    participant Claude as Claude Desktop
+    participant GW as MCP Gateway
+    participant SD as Service Discovery
+    participant PSM as payment-service<br/>MCP Sidecar
+    participant PS as payment-service<br/>App Container
+    participant Prom as Prometheus
+    
+    Dev->>Claude: "Check payment service health"
+    Claude->>GW: list_tools()
+    GW->>SD: Get all services with label mcp-enabled=true
+    SD-->>GW: [payment-service, user-service, mqtt-publisher, ...]
+    GW->>PSM: Discover tools
+    PSM-->>GW: [get_health, get_metrics, check_transaction_status, ...]
+    GW-->>Claude: Available tools: payment-service.get_health, ...
+    
+    Claude->>GW: call_tool(payment-service.get_health)
+    GW->>PSM: execute get_health
+    PSM->>PS: HTTP GET localhost:8080/health
+    PS-->>PSM: {"status": "healthy", "db": "connected"}
+    PSM->>Prom: Query payment_service_* metrics
+    Prom-->>PSM: error_rate: 0.02, latency_p99: 145ms
+    PSM-->>GW: Health report + metrics
+    GW-->>Claude: Formatted diagnostic data
+    Claude-->>Dev: "Payment service is healthy.<br/>DB connected, error rate 2%, p99 145ms"`,
+
+    components: `graph TB
+    subgraph "MCP Gateway (Go/Rust)"
+        GWR[HTTP Server<br/>:3000]
+        DISC[Service Discovery]
+        ROUTE[Request Router]
+        CACHE[Tool Cache]
+        AUTH[Auth/RBAC]
+        
+        GWR --> AUTH
+        AUTH --> ROUTE
+        ROUTE --> DISC
+        ROUTE --> CACHE
+    end
+    
+    subgraph "MCP Sidecar (Lightweight)"
+        MCPS[MCP Server<br/>:3000]
+        TOOLS[Tool Registry]
+        EXEC[Tool Executors]
+        
+        subgraph "Generic Tools"
+            H[Health Check]
+            M[Metrics Scraper]
+            L[Log Fetcher]
+            E[Envoy Stats]
+        end
+        
+        subgraph "Service-Specific Tools"
+            CFG[ConfigMap Loaded<br/>Custom Tools]
+        end
+        
+        MCPS --> TOOLS
+        TOOLS --> EXEC
+        EXEC --> H
+        EXEC --> M
+        EXEC --> L
+        EXEC --> E
+        EXEC --> CFG
+    end
+    
+    subgraph "Configuration"
+        CM1[ConfigMap<br/>payment-service-mcp]
+        CM2[ConfigMap<br/>user-service-mcp]
+        SEC[Secret<br/>mcp-credentials]
+    end
+    
+    ROUTE -.Dynamic Discovery.-> MCPS
+    CFG --> CM1
+    CFG --> CM2
+    AUTH --> SEC
+    
+    style GWR fill:#fff4e6
+    style MCPS fill:#e8f5e9
+    style DISC fill:#f3e5f5
+    style TOOLS fill:#e1f5ff`
+  };
+
+  return (
+    <div style={{ 
+      fontFamily: 'system-ui, -apple-system, sans-serif',
+      padding: '20px',
+      maxWidth: '1400px',
+      margin: '0 auto',
+      backgroundColor: '#f5f5f5',
+      minHeight: '100vh'
+    }}>
+      <div style={{
+        backgroundColor: 'white',
+        borderRadius: '8px',
+        padding: '30px',
+        boxShadow: '0 2px 8px rgba(0,0,0,0.1)'
+      }}>
+        <h1 style={{ 
+          margin: '0 0 10px 0',
+          color: '#1a1a1a',
+          fontSize: '32px',
+          fontWeight: '600'
+        }}>
+          MCP Sidecar Architecture
+        </h1>
+        <p style={{ 
+          margin: '0 0 30px 0',
+          color: '#666',
+          fontSize: '16px'
+        }}>
+          Gateway-based discovery with per-service MCP sidecars for Kubernetes microservices
+        </p>
+
+        {/* Tab Navigation */}
+        <div style={{ 
+          display: 'flex',
+          gap: '10px',
+          marginBottom: '30px',
+          borderBottom: '2px solid #e0e0e0',
+          paddingBottom: '0'
+        }}>
+          {[
+            { id: 'overview', label: 'Architecture Overview' },
+            { id: 'sequence', label: 'Request Flow' },
+            { id: 'components', label: 'Component Details' }
+          ].map(tab => (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              style={{
+                padding: '12px 24px',
+                border: 'none',
+                backgroundColor: 'transparent',
+                color: activeTab === tab.id ? '#2563eb' : '#666',
+                fontSize: '15px',
+                fontWeight: activeTab === tab.id ? '600' : '400',
+                cursor: 'pointer',
+                borderBottom: activeTab === tab.id ? '3px solid #2563eb' : '3px solid transparent',
+                transition: 'all 0.2s',
+                marginBottom: '-2px'
+              }}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Diagram Container */}
+        <div style={{
+          backgroundColor: '#fafafa',
+          borderRadius: '6px',
+          padding: '30px',
+          minHeight: '600px',
+          overflow: 'auto'
+        }}>
+          <div className="mermaid" key={activeTab}>
+            {diagrams[activeTab]}
+          </div>
+        </div>
+
+        {/* Legend */}
+        <div style={{
+          marginTop: '30px',
+          padding: '20px',
+          backgroundColor: '#f8f9fa',
+          borderRadius: '6px',
+          border: '1px solid #e0e0e0'
+        }}>
+          <h3 style={{ 
+            margin: '0 0 15px 0',
+            fontSize: '18px',
+            fontWeight: '600',
+            color: '#1a1a1a'
+          }}>
+            Legend
+          </h3>
+          <div style={{ 
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+            gap: '15px'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <div style={{ width: '30px', height: '20px', backgroundColor: '#e1f5ff', border: '1px solid #90caf9', borderRadius: '3px' }}></div>
+              <span style={{ fontSize: '14px', color: '#555' }}>Client Components</span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <div style={{ width: '30px', height: '20px', backgroundColor: '#fff4e6', border: '1px solid #ffcc80', borderRadius: '3px' }}></div>
+              <span style={{ fontSize: '14px', color: '#555' }}>MCP Gateway</span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <div style={{ width: '30px', height: '20px', backgroundColor: '#e8f5e9', border: '1px solid '#a5d6a7', borderRadius: '3px' }}></div>
+              <span style={{ fontSize: '14px', color: '#555' }}>MCP Sidecars</span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <div style={{ width: '30px', height: '20px', backgroundColor: '#f3e5f5', border: '1px solid #ce93d8', borderRadius: '3px' }}></div>
+              <span style={{ fontSize: '14px', color: '#555' }}>Discovery/Config</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Key Points */}
+        <div style={{
+          marginTop: '30px',
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))',
+          gap: '20px'
+        }}>
+          <div style={{
+            padding: '20px',
+            backgroundColor: 'white',
+            border: '1px solid #e0e0e0',
+            borderRadius: '6px'
+          }}>
+            <h4 style={{ 
+              margin: '0 0 10px 0',
+              fontSize: '16px',
+              fontWeight: '600',
+              color: '#2563eb'
+            }}>
+              🎯 Per-Service Isolation
+            </h4>
+            <p style={{ margin: 0, fontSize: '14px', color: '#666', lineHeight: '1.6' }}>
+              Each microservice has its own MCP sidecar with localhost access, ensuring zero network hops and service-specific diagnostics.
+            </p>
+          </div>
+
+          <div style={{
+            padding: '20px',
+            backgroundColor: 'white',
+            border: '1px solid #e0e0e0',
+            borderRadius: '6px'
+          }}>
+            <h4 style={{ 
+              margin: '0 0 10px 0',
+              fontSize: '16px',
+              fontWeight: '600',
+              color: '#2563eb'
+            }}>
+              🔍 Centralized Discovery
+            </h4>
+            <p style={{ margin: 0, fontSize: '14px', color: '#666', lineHeight: '1.6' }}>
+              MCP Gateway automatically discovers all sidecars via Kubernetes labels, providing a unified interface to Claude Desktop.
+            </p>
+          </div>
+
+          <div style={{
+            padding: '20px',
+            backgroundColor: 'white',
+            border: '1px solid #e0e0e0',
+            borderRadius: '6px'
+          }}>
+            <h4 style={{ 
+              margin: '0 0 10px 0',
+              fontSize: '16px',
+              fontWeight: '600',
+              color: '#2563eb'
+            }}>
+              📦 GitOps Compatible
+            </h4>
+            <p style={{ margin: 0, fontSize: '14px', color: '#666', lineHeight: '1.6' }}>
+              Fully integrates with Flux using Kustomize patches and stamp patterns for consistent deployment across 36 services.
+            </p>
+          </div>
+        </div>
+
+        {/* Resource Footer */}
+        <div style={{
+          marginTop: '30px',
+          padding: '15px',
+          backgroundColor: '#f0f7ff',
+          border: '1px solid #bfdbfe',
+          borderRadius: '6px',
+          fontSize: '14px',
+          color: '#1e40af'
+        }}>
+          <strong>💡 Resource Overhead:</strong> ~360m CPU and ~1.1GB memory for 36 services (10m CPU + 32Mi memory per sidecar)
+        </div>
+      </div>
+    </div>
+  );
+}
