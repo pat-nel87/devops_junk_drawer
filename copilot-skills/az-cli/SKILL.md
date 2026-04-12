@@ -113,25 +113,137 @@ az vm run-command invoke --resource-group <rg> --name <vm> \
 ### Containers — AKS
 
 ```bash
-# Create AKS cluster
+# Create AKS cluster with managed identity
 az aks create --resource-group <rg> --name <cluster> --node-count 3 \
   --enable-managed-identity --generate-ssh-keys
+
+# Create AKS with OIDC + workload identity (modern auth)
+az aks create --resource-group <rg> --name <cluster> --node-count 3 \
+  --enable-managed-identity --enable-oidc-issuer --enable-workload-identity \
+  --generate-ssh-keys
 
 # Get credentials (merges into kubeconfig)
 az aks get-credentials --resource-group <rg> --name <cluster>
 
+# Get credentials for admin (bypasses RBAC — use sparingly)
+az aks get-credentials --resource-group <rg> --name <cluster> --admin
+
 # Show cluster
 az aks show --resource-group <rg> --name <cluster>
 
-# Scale node pool
+# Get OIDC issuer URL (needed for workload identity federation)
+az aks show --resource-group <rg> --name <cluster> --query oidcIssuerProfile.issuerUrl -o tsv
+
+# Get node resource group (MC_ group)
+az aks show --resource-group <rg> --name <cluster> --query nodeResourceGroup -o tsv
+
+# Node pool operations
+az aks nodepool list --resource-group <rg> --cluster-name <cluster> -o table
 az aks nodepool scale --resource-group <rg> --cluster-name <cluster> \
   --name <nodepool> --node-count <n>
+az aks nodepool add --resource-group <rg> --cluster-name <cluster> \
+  --name <pool> --node-count 3 --node-vm-size Standard_D4s_v3 --mode User
+az aks nodepool upgrade --resource-group <rg> --cluster-name <cluster> \
+  --name <pool> --kubernetes-version <ver>
 
 # Upgrade cluster
 az aks upgrade --resource-group <rg> --name <cluster> --kubernetes-version <ver>
+az aks get-upgrades --resource-group <rg> --name <cluster> -o table
 
 # List available Kubernetes versions
 az aks get-versions --location <region> --output table
+
+# Enable monitoring add-on
+az aks enable-addons --resource-group <rg> --name <cluster> --addons monitoring \
+  --workspace-resource-id <la-workspace-id>
+
+# Enable Azure Key Vault secrets provider
+az aks enable-addons --resource-group <rg> --name <cluster> \
+  --addons azure-keyvault-secrets-provider
+
+# Check cluster health and running config
+az aks show --resource-group <rg> --name <cluster> \
+  --query "{K8s:kubernetesVersion,Power:powerState.code,Provisioning:provisioningState,FQDN:fqdn}" -o table
+
+# Cordon/drain via stop/start (whole cluster)
+az aks stop --resource-group <rg> --name <cluster>
+az aks start --resource-group <rg> --name <cluster>
+
+# Run kubectl commands via az (when kubectl not available)
+az aks command invoke --resource-group <rg> --name <cluster> \
+  --command "kubectl get pods -A"
+```
+
+### AKS + ACR Integration
+
+```bash
+# Attach ACR to AKS (grants AcrPull role to kubelet identity)
+az aks update --resource-group <rg> --name <cluster> --attach-acr <registry>
+
+# Detach ACR
+az aks update --resource-group <rg> --name <cluster> --detach-acr <registry>
+
+# Verify ACR access from AKS
+az aks check-acr --resource-group <rg> --name <cluster> --acr <registry>.azurecr.io
+
+# Import image to ACR (avoids Docker Hub rate limits)
+az acr import --name <registry> --source docker.io/library/nginx:latest \
+  --image nginx:latest
+
+# Build image in ACR (no local Docker needed)
+az acr build --registry <registry> --image <repo>:<tag> --file Dockerfile .
+
+# ACR task for automated builds on git push
+az acr task create --registry <registry> --name <task> \
+  --image <repo>:{{.Run.ID}} --context <git-url> --file Dockerfile \
+  --git-access-token <pat>
+```
+
+### AKS + AGIC (Application Gateway Ingress Controller)
+
+```bash
+# Create Application Gateway for AGIC
+az network public-ip create --resource-group <rg> --name <agw-pip> --sku Standard
+az network application-gateway create --resource-group <rg> --name <agw> \
+  --sku Standard_v2 --public-ip-address <agw-pip> \
+  --vnet-name <vnet> --subnet <agw-subnet> --priority 100
+
+# Enable AGIC add-on on AKS (greenfield — creates new AppGW)
+az aks enable-addons --resource-group <rg> --name <cluster> \
+  --addons ingress-appgw --appgw-name <agw> --appgw-subnet-cidr "10.225.0.0/16"
+
+# Enable AGIC add-on (brownfield — use existing AppGW)
+az aks enable-addons --resource-group <rg> --name <cluster> \
+  --addons ingress-appgw --appgw-id <appgw-resource-id>
+
+# Verify AGIC pod is running
+az aks command invoke --resource-group <rg> --name <cluster> \
+  --command "kubectl get pods -n kube-system -l app=ingress-appgw"
+
+# Check AGIC identity and permissions
+AGIC_IDENTITY=$(az aks show -g <rg> -n <cluster> \
+  --query addonProfiles.ingressApplicationGateway.identity.clientId -o tsv)
+az role assignment list --assignee $AGIC_IDENTITY -o table
+
+# Show AppGW backend health (diagnose 502/504 issues)
+az network application-gateway show-backend-health \
+  --resource-group <rg> --name <agw> -o table
+
+# Show AppGW health probes
+az network application-gateway probe list --resource-group <rg> --gateway-name <agw> -o table
+
+# Check AppGW WAF rules (if WAF enabled)
+az network application-gateway waf-policy list --resource-group <rg> -o table
+
+# View AppGW access logs (requires diagnostic settings → Log Analytics)
+az monitor log-analytics query --workspace <workspace-id> --analytics-query "
+AzureDiagnostics
+| where ResourceType == 'APPLICATIONGATEWAYS'
+| where Category == 'ApplicationGatewayAccessLog'
+| project TimeGenerated, clientIP_s, httpMethod_s, requestUri_s, httpStatus_d, serverRouted_s
+| order by TimeGenerated desc
+| take 50
+"
 ```
 
 ### Containers — ACR (Container Registry)
@@ -202,6 +314,34 @@ az network dns record-set a add-record --resource-group <rg> \
 az network private-dns zone create --resource-group <rg> --name <zone>
 az network private-dns link vnet create --resource-group <rg> \
   --zone-name <zone> --name <link> --virtual-network <vnet> --registration-enabled false
+
+# VNet peering
+az network vnet peering create --resource-group <rg-1> --vnet-name <vnet-1> \
+  --name <peering-name> --remote-vnet <vnet-2-resource-id> --allow-vnet-access
+az network vnet peering create --resource-group <rg-2> --vnet-name <vnet-2> \
+  --name <peering-name-reverse> --remote-vnet <vnet-1-resource-id> --allow-vnet-access
+
+# Show effective routes on a NIC (debug routing)
+az network nic show-effective-route-table --resource-group <rg> --name <nic> -o table
+
+# Show effective NSG rules on a NIC (debug connectivity)
+az network nic list-effective-nsg --resource-group <rg> --name <nic>
+
+# Network Watcher connectivity check
+az network watcher test-connectivity --resource-group <rg> \
+  --source-resource <vm-id> --dest-address <ip-or-fqdn> --dest-port 443
+
+# Network Watcher IP flow verify (is traffic allowed?)
+az network watcher test-ip-flow --direction Inbound --resource-group <rg> \
+  --vm <vm-name> --local <vm-ip>:* --remote <source-ip>:* --protocol Tcp --port 443
+
+# User-defined route table
+az network route-table create --resource-group <rg> --name <rt>
+az network route-table route create --resource-group <rg> --route-table-name <rt> \
+  --name <route> --address-prefix 0.0.0.0/0 --next-hop-type VirtualAppliance \
+  --next-hop-ip-address <firewall-ip>
+az network vnet subnet update --resource-group <rg> --vnet-name <vnet> \
+  --name <subnet> --route-table <rt>
 ```
 
 ### Storage
@@ -324,44 +464,878 @@ az functionapp create --resource-group <rg> --consumption-plan-location <region>
   --name <app> --storage-account <sa> --runtime node --runtime-version 20
 ```
 
-### Monitoring
+### Monitoring — Log Analytics Workspaces
 
 ```bash
-# List activity log
-az monitor activity-log list --resource-group <rg> --output table
+# Create Log Analytics workspace
+az monitor log-analytics workspace create --resource-group <rg> \
+  --workspace-name <workspace> --location <region> --sku PerGB2018
 
-# Metrics
-az monitor metrics list --resource <resource-id> \
-  --metric "Percentage CPU" --interval PT1H
+# Show workspace details
+az monitor log-analytics workspace show --resource-group <rg> --workspace-name <workspace>
 
-# Log Analytics query
+# Get workspace ID (used in KQL queries)
+az monitor log-analytics workspace show --resource-group <rg> \
+  --workspace-name <workspace> --query customerId -o tsv
+
+# Get workspace resource ID (used in --workspace-resource-id params)
+az monitor log-analytics workspace show --resource-group <rg> \
+  --workspace-name <workspace> --query id -o tsv
+
+# List workspaces in subscription
+az monitor log-analytics workspace list --output table
+
+# List tables in workspace
+az monitor log-analytics workspace table list --resource-group <rg> \
+  --workspace-name <workspace> --query "[].{Name:name,Plan:plan,Retention:retentionInDays}" -o table
+
+# Update retention
+az monitor log-analytics workspace update --resource-group <rg> \
+  --workspace-name <workspace> --retention-time 90
+
+# Check workspace usage / ingestion volume
+az monitor log-analytics query --workspace <workspace-id> --analytics-query "
+Usage
+| where TimeGenerated > ago(30d)
+| summarize TotalGB = sum(Quantity) / 1024 by DataType
+| order by TotalGB desc
+" -o table
+
+# List linked solutions (Container Insights, Sentinel, etc.)
+az monitor log-analytics solution list --resource-group <rg> -o table
+```
+
+### Monitoring — KQL Queries via CLI
+
+The `az monitor log-analytics query` command runs KQL (Kusto Query Language) queries against Log Analytics workspaces. This is the most powerful diagnostic tool in the Azure CLI.
+
+```bash
+# Basic query structure
 az monitor log-analytics query --workspace <workspace-id> \
-  --analytics-query "AzureActivity | where TimeGenerated > ago(1h) | summarize count() by OperationName"
+  --analytics-query "<KQL>" -o table
 
-# Alerts
+# --- Activity & Audit ---
+
+# Recent ARM operations (who did what)
+az monitor log-analytics query --workspace <workspace-id> --analytics-query "
+AzureActivity
+| where TimeGenerated > ago(24h)
+| where OperationNameValue !has 'read'
+| project TimeGenerated, Caller, OperationNameValue, ActivityStatusValue, ResourceGroup
+| order by TimeGenerated desc
+| take 50
+" -o table
+
+# Failed ARM operations
+az monitor log-analytics query --workspace <workspace-id> --analytics-query "
+AzureActivity
+| where TimeGenerated > ago(24h)
+| where ActivityStatusValue == 'Failed'
+| project TimeGenerated, Caller, OperationNameValue, Properties_d.statusMessage
+| order by TimeGenerated desc
+" -o table
+
+# --- Container Insights (AKS) ---
+
+# Pod failures and restarts
+az monitor log-analytics query --workspace <workspace-id> --analytics-query "
+KubePodInventory
+| where TimeGenerated > ago(1h)
+| where PodStatus in ('Failed', 'Unknown')
+  or ContainerRestartCount > 3
+| project TimeGenerated, Namespace, Name, PodStatus, ContainerRestartCount, ClusterName
+| order by ContainerRestartCount desc
+" -o table
+
+# Container CPU usage by namespace
+az monitor log-analytics query --workspace <workspace-id> --analytics-query "
+Perf
+| where TimeGenerated > ago(1h)
+| where ObjectName == 'K8SContainer' and CounterName == 'cpuUsageNanoCores'
+| summarize AvgCPU = avg(CounterValue) / 1000000 by bin(TimeGenerated, 5m), InstanceName
+| order by AvgCPU desc
+| take 20
+" -o table
+
+# Container memory usage
+az monitor log-analytics query --workspace <workspace-id> --analytics-query "
+Perf
+| where TimeGenerated > ago(1h)
+| where ObjectName == 'K8SContainer' and CounterName == 'memoryWorkingSetBytes'
+| summarize AvgMemMB = avg(CounterValue) / 1048576 by InstanceName
+| order by AvgMemMB desc
+| take 20
+" -o table
+
+# Container logs (stdout/stderr) for a specific pod
+az monitor log-analytics query --workspace <workspace-id> --analytics-query "
+ContainerLogV2
+| where TimeGenerated > ago(1h)
+| where PodName has '<pod-name>'
+| project TimeGenerated, PodName, ContainerName, LogMessage, LogSource
+| order by TimeGenerated desc
+| take 100
+"
+
+# Node conditions (NotReady, pressure)
+az monitor log-analytics query --workspace <workspace-id> --analytics-query "
+KubeNodeInventory
+| where TimeGenerated > ago(30m)
+| where Status != 'Ready'
+| project TimeGenerated, Computer, Status, Labels, ClusterName
+" -o table
+
+# OOMKilled containers
+az monitor log-analytics query --workspace <workspace-id> --analytics-query "
+ContainerInventory
+| where TimeGenerated > ago(24h)
+| where ContainerState == 'Failed' and ExitCode == 137
+| project TimeGenerated, ContainerID, Name, Image, ContainerState, ExitCode
+| order by TimeGenerated desc
+" -o table
+
+# AKS cluster autoscaler events
+az monitor log-analytics query --workspace <workspace-id> --analytics-query "
+KubeEvents
+| where TimeGenerated > ago(2h)
+| where Source has 'cluster-autoscaler'
+| project TimeGenerated, Name, Namespace, Reason, Message
+| order by TimeGenerated desc
+" -o table
+
+# --- Networking & AppGW ---
+
+# Application Gateway 4xx/5xx errors
+az monitor log-analytics query --workspace <workspace-id> --analytics-query "
+AzureDiagnostics
+| where ResourceType == 'APPLICATIONGATEWAYS'
+| where Category == 'ApplicationGatewayAccessLog'
+| where httpStatus_d >= 400
+| summarize Count = count() by httpStatus_d, requestUri_s, serverRouted_s
+| order by Count desc
+| take 20
+" -o table
+
+# AppGW backend health failures
+az monitor log-analytics query --workspace <workspace-id> --analytics-query "
+AzureDiagnostics
+| where ResourceType == 'APPLICATIONGATEWAYS'
+| where Category == 'ApplicationGatewayAccessLog'
+| where httpStatus_d == 502 or httpStatus_d == 504
+| summarize Count = count() by bin(TimeGenerated, 5m), serverRouted_s, requestUri_s
+| order by TimeGenerated desc
+" -o table
+
+# NSG flow logs (blocked traffic)
+az monitor log-analytics query --workspace <workspace-id> --analytics-query "
+AzureNetworkAnalytics_CL
+| where TimeGenerated > ago(1h)
+| where FlowStatus_s == 'D'
+| summarize Count = count() by SrcIP_s, DestIP_s, DestPort_d, NSGRule_s
+| order by Count desc
+| take 20
+" -o table
+
+# DNS query failures
+az monitor log-analytics query --workspace <workspace-id> --analytics-query "
+AzureDiagnostics
+| where ResourceType == 'DNSZONES'
+| where ResultCode != 'NOERROR'
+| summarize Count = count() by Query_s, ResultCode, ClientIp_s
+| order by Count desc
+" -o table
+
+# --- Security & Identity ---
+
+# Failed sign-in attempts
+az monitor log-analytics query --workspace <workspace-id> --analytics-query "
+SigninLogs
+| where TimeGenerated > ago(24h)
+| where ResultType != '0'
+| summarize FailureCount = count() by UserPrincipalName, ResultDescription, IPAddress, AppDisplayName
+| order by FailureCount desc
+| take 20
+" -o table
+
+# Risky sign-ins
+az monitor log-analytics query --workspace <workspace-id> --analytics-query "
+SigninLogs
+| where TimeGenerated > ago(7d)
+| where RiskLevelDuringSignIn in ('high', 'medium')
+| project TimeGenerated, UserPrincipalName, IPAddress, Location, RiskLevelDuringSignIn, RiskDetail
+| order by TimeGenerated desc
+" -o table
+
+# Key Vault access audit
+az monitor log-analytics query --workspace <workspace-id> --analytics-query "
+AzureDiagnostics
+| where ResourceType == 'VAULTS'
+| where Category == 'AuditEvent'
+| project TimeGenerated, OperationName, CallerIPAddress, identity_claim_upn_s, ResultType
+| order by TimeGenerated desc
+| take 50
+" -o table
+
+# --- Resource Health ---
+
+# Resource health events
+az monitor log-analytics query --workspace <workspace-id> --analytics-query "
+AzureActivity
+| where CategoryValue == 'ResourceHealth'
+| where TimeGenerated > ago(7d)
+| project TimeGenerated, ResourceGroup, _ResourceId, Properties_d
+| order by TimeGenerated desc
+" -o table
+
+# --- Cost / Usage ---
+
+# Ingestion by data type (cost optimization)
+az monitor log-analytics query --workspace <workspace-id> --analytics-query "
+Usage
+| where TimeGenerated > ago(7d)
+| where IsBillable == true
+| summarize BillableGB = sum(Quantity) / 1024 by DataType
+| order by BillableGB desc
+" -o table
+```
+
+### Monitoring — Application Insights
+
+```bash
+# Create Application Insights (workspace-based)
+az monitor app-insights component create --app <app-insights> \
+  --resource-group <rg> --location <region> --kind web \
+  --workspace <la-workspace-resource-id>
+
+# Show instrumentation key and connection string
+az monitor app-insights component show --app <app-insights> --resource-group <rg> \
+  --query "{InstrumentationKey:instrumentationKey,ConnectionString:connectionString}"
+
+# Query App Insights traces
+az monitor app-insights query --app <app-insights> --resource-group <rg> \
+  --analytics-query "
+traces
+| where timestamp > ago(1h)
+| where severityLevel >= 3
+| project timestamp, message, severityLevel, operation_Name
+| order by timestamp desc
+| take 50
+"
+
+# Query App Insights requests (HTTP)
+az monitor app-insights query --app <app-insights> --resource-group <rg> \
+  --analytics-query "
+requests
+| where timestamp > ago(1h)
+| summarize Count = count(), AvgDuration = avg(duration), FailRate = countif(success == false) * 100.0 / count()
+  by name
+| order by Count desc
+"
+
+# Query exceptions
+az monitor app-insights query --app <app-insights> --resource-group <rg> \
+  --analytics-query "
+exceptions
+| where timestamp > ago(24h)
+| summarize Count = count() by type, outerMessage
+| order by Count desc
+| take 20
+"
+
+# Query dependencies (external calls — databases, APIs)
+az monitor app-insights query --app <app-insights> --resource-group <rg> \
+  --analytics-query "
+dependencies
+| where timestamp > ago(1h)
+| where success == false
+| summarize FailCount = count() by target, name, resultCode
+| order by FailCount desc
+"
+
+# Show live metrics summary
+az monitor app-insights metrics show --app <app-insights> --resource-group <rg> \
+  --metric requests/count --interval PT5M --aggregation sum
+
+# Page views and performance (browser-side)
+az monitor app-insights query --app <app-insights> --resource-group <rg> \
+  --analytics-query "
+pageViews
+| where timestamp > ago(24h)
+| summarize Views = count(), AvgDuration = avg(duration) by name
+| order by Views desc
+"
+
+# Custom events
+az monitor app-insights query --app <app-insights> --resource-group <rg> \
+  --analytics-query "
+customEvents
+| where timestamp > ago(24h)
+| summarize Count = count() by name
+| order by Count desc
+"
+
+# End-to-end transaction search (by operation ID)
+az monitor app-insights query --app <app-insights> --resource-group <rg> \
+  --analytics-query "
+union requests, dependencies, exceptions, traces
+| where operation_Id == '<operation-id>'
+| project timestamp, itemType, name, message, resultCode, success, duration
+| order by timestamp asc
+"
+
+# Availability test results
+az monitor app-insights query --app <app-insights> --resource-group <rg> \
+  --analytics-query "
+availabilityResults
+| where timestamp > ago(24h)
+| summarize SuccessRate = countif(success == true) * 100.0 / count() by name, location
+| order by SuccessRate asc
+"
+```
+
+### Monitoring — Metrics
+
+```bash
+# List available metrics for a resource
+az monitor metrics list-definitions --resource <resource-id> \
+  --query "[].{Metric:name.value,Display:name.localizedValue,Unit:unit}" -o table
+
+# CPU metrics for a VM (last hour, 5-minute granularity)
+az monitor metrics list --resource <resource-id> \
+  --metric "Percentage CPU" --interval PT5M --aggregation Average \
+  --start-time $(date -u -d "-1 hour" +%Y-%m-%dT%H:%MZ) -o table
+
+# Multiple metrics at once
+az monitor metrics list --resource <resource-id> \
+  --metric "Percentage CPU" "Available Memory Bytes" --interval PT5M -o table
+
+# AKS node CPU/memory
+az monitor metrics list --resource <aks-resource-id> \
+  --metric "node_cpu_usage_percentage" "node_memory_working_set_percentage" \
+  --interval PT5M -o table
+
+# AKS pod count by phase
+az monitor metrics list --resource <aks-resource-id> \
+  --metric "kube_pod_status_phase" --interval PT5M -o table
+
+# Application Gateway metrics
+az monitor metrics list --resource <appgw-resource-id> \
+  --metric "HealthyHostCount" "UnhealthyHostCount" "TotalRequests" "FailedRequests" \
+  --interval PT5M -o table
+
+# Storage account metrics
+az monitor metrics list --resource <storage-resource-id> \
+  --metric "Transactions" "Ingress" "Egress" --interval PT1H -o table
+
+# Key Vault request latency
+az monitor metrics list --resource <keyvault-resource-id> \
+  --metric "ServiceApiLatency" "ServiceApiHit" --interval PT5M -o table
+
+# SQL Database DTU/CPU
+az monitor metrics list --resource <sqldb-resource-id> \
+  --metric "dtu_consumption_percent" "cpu_percent" "storage_percent" \
+  --interval PT5M -o table
+```
+
+### Monitoring — Alerts & Action Groups
+
+```bash
+# Create action group (email + webhook)
+az monitor action-group create --resource-group <rg> --name <ag> \
+  --short-name <short> \
+  --action email admin admin@example.com \
+  --action webhook ops https://hooks.example.com/alert
+
+# Create action group with Azure Function
+az monitor action-group create --resource-group <rg> --name <ag> \
+  --short-name <short> \
+  --action azurefunction <name> <function-app-resource-id> <function-name> <http-trigger-url>
+
+# List action groups
+az monitor action-group list --resource-group <rg> -o table
+
+# Create metric alert (e.g. high CPU)
 az monitor metrics alert create --resource-group <rg> --name <alert> \
-  --scopes <resource-id> --condition "avg Percentage CPU > 80" \
-  --action <action-group-id>
+  --scopes <resource-id> \
+  --condition "avg Percentage CPU > 80" \
+  --window-size 5m --evaluation-frequency 1m \
+  --severity 2 \
+  --action <action-group-id> \
+  --description "CPU above 80% for 5 minutes"
 
-# Diagnostic settings
+# Create metric alert for AKS node NotReady
+az monitor metrics alert create --resource-group <rg> --name aks-node-notready \
+  --scopes <aks-resource-id> \
+  --condition "avg kube_node_status_condition{status='true',condition='Ready'} < 1" \
+  --severity 1 --action <action-group-id>
+
+# Create log alert (KQL-based)
+az monitor scheduled-query create --resource-group <rg> --name <alert> \
+  --scopes <la-workspace-resource-id> \
+  --condition "count > 0" \
+  --condition-query "
+    ContainerLogV2
+    | where LogMessage has 'FATAL' or LogMessage has 'OutOfMemory'
+    | where TimeGenerated > ago(5m)
+  " \
+  --severity 1 --action-groups <action-group-resource-id> \
+  --evaluation-frequency 5m --window-size 5m
+
+# Create activity log alert (e.g. resource deleted)
+az monitor activity-log alert create --resource-group <rg> --name <alert> \
+  --condition category=Administrative and operationName=Microsoft.Resources/subscriptions/resourceGroups/delete \
+  --action-group <action-group-id>
+
+# List alerts
+az monitor metrics alert list --resource-group <rg> -o table
+az monitor scheduled-query list --resource-group <rg> -o table
+
+# Show alert rule details
+az monitor metrics alert show --resource-group <rg> --name <alert>
+
+# Disable/enable alert
+az monitor metrics alert update --resource-group <rg> --name <alert> --enabled false
+```
+
+### Monitoring — Diagnostic Settings
+
+Every Azure resource can forward logs and metrics to Log Analytics, Storage, or Event Hubs.
+
+```bash
+# List available diagnostic categories for a resource
+az monitor diagnostic-settings categories list --resource <resource-id> \
+  --query "[].{Category:name,Type:categoryType}" -o table
+
+# Enable all logs + metrics → Log Analytics
 az monitor diagnostic-settings create --name <setting> --resource <resource-id> \
-  --workspace <la-workspace-id> --logs '[{"enabled":true,"category":"AuditEvent"}]'
+  --workspace <la-workspace-id> \
+  --logs '[{"categoryGroup":"allLogs","enabled":true}]' \
+  --metrics '[{"category":"AllMetrics","enabled":true}]'
+
+# Enable specific categories (e.g. Key Vault audit only)
+az monitor diagnostic-settings create --name <setting> --resource <resource-id> \
+  --workspace <la-workspace-id> \
+  --logs '[{"category":"AuditEvent","enabled":true},{"category":"AzurePolicyEvaluationDetails","enabled":true}]'
+
+# Enable for AKS (Container Insights + audit logs)
+az monitor diagnostic-settings create --name aks-diag --resource <aks-resource-id> \
+  --workspace <la-workspace-id> \
+  --logs '[
+    {"category":"kube-apiserver","enabled":true},
+    {"category":"kube-audit","enabled":true},
+    {"category":"kube-audit-admin","enabled":true},
+    {"category":"kube-controller-manager","enabled":true},
+    {"category":"kube-scheduler","enabled":true},
+    {"category":"cluster-autoscaler","enabled":true},
+    {"category":"guard","enabled":true}
+  ]'
+
+# Enable for Application Gateway
+az monitor diagnostic-settings create --name appgw-diag --resource <appgw-resource-id> \
+  --workspace <la-workspace-id> \
+  --logs '[
+    {"category":"ApplicationGatewayAccessLog","enabled":true},
+    {"category":"ApplicationGatewayPerformanceLog","enabled":true},
+    {"category":"ApplicationGatewayFirewallLog","enabled":true}
+  ]' \
+  --metrics '[{"category":"AllMetrics","enabled":true}]'
+
+# Enable for NSG (flow logs)
+az network watcher flow-log create --resource-group <rg> --name <flowlog> \
+  --nsg <nsg-id> --workspace <la-workspace-id> \
+  --storage-account <storage-id> --enabled true --retention 30 \
+  --traffic-analytics true --traffic-analytics-interval 10
+
+# List diagnostic settings on a resource
+az monitor diagnostic-settings list --resource <resource-id> -o table
+
+# Delete diagnostic setting
+az monitor diagnostic-settings delete --name <setting> --resource <resource-id>
+```
+
+### Monitoring — Activity Log
+
+```bash
+# Recent activity in a resource group
+az monitor activity-log list --resource-group <rg> \
+  --start-time $(date -u -d "-24 hours" +%Y-%m-%dT%H:%MZ) \
+  --query "[?status.value=='Failed'].{Time:eventTimestamp,Op:operationName.value,Status:status.value,Caller:caller}" \
+  -o table
+
+# Filter by caller (who did this?)
+az monitor activity-log list --resource-group <rg> \
+  --caller <upn-or-sp-id> -o table
+
+# Filter by resource
+az monitor activity-log list --resource-id <resource-id> -o table
+
+# Subscription-level (role assignments, policy changes)
+az monitor activity-log list \
+  --start-time $(date -u -d "-7 days" +%Y-%m-%dT%H:%MZ) \
+  --query "[?contains(operationName.value, 'roleAssignment')]" -o table
+```
+
+### Monitoring — Service Health & Resource Health
+
+```bash
+# Current service health issues
+az rest --method get \
+  --url "https://management.azure.com/subscriptions/<sub-id>/providers/Microsoft.ResourceHealth/events?api-version=2022-10-01&queryStartTime=$(date -u -d '-7 days' +%Y-%m-%dT%H:%MZ)" \
+  --query "value[].{Title:properties.title,Impact:properties.impactType,Status:properties.status,Start:properties.impactStartTime}" -o table
+
+# Resource health for a specific resource
+az rest --method get \
+  --url "<resource-id>/providers/Microsoft.ResourceHealth/availabilityStatuses/current?api-version=2023-07-01-preview" \
+  --query "{Status:properties.availabilityState,Summary:properties.summary,Since:properties.occurredTime}"
+
+# Resource health for all resources in a group
+az resource list -g <rg> --query "[].id" -o tsv | while read id; do
+  echo "=== $id ==="
+  az rest --method get --url "$id/providers/Microsoft.ResourceHealth/availabilityStatuses/current?api-version=2023-07-01-preview" \
+    --query "properties.{State:availabilityState,Summary:summary}" -o table 2>/dev/null
+done
+```
+
+### FluxCD GitOps via AKS
+
+```bash
+# Install Flux extension on AKS
+az k8s-extension create --resource-group <rg> --cluster-name <cluster> \
+  --cluster-type managedClusters --name flux --extension-type microsoft.flux \
+  --scope cluster
+
+# Create Flux GitRepository source
+az k8s-configuration flux create --resource-group <rg> --cluster-name <cluster> \
+  --cluster-type managedClusters --name <config-name> \
+  --url <git-repo-url> --branch <branch> \
+  --scope cluster --namespace flux-system \
+  --https-user <user> --https-key <pat>
+
+# Create Flux GitRepository with SSH
+az k8s-configuration flux create --resource-group <rg> --cluster-name <cluster> \
+  --cluster-type managedClusters --name <config-name> \
+  --url <ssh-git-url> --branch <branch> \
+  --scope cluster --namespace flux-system \
+  --ssh-private-key-file <key-path>
+
+# Add kustomization to existing config
+az k8s-configuration flux kustomization create --resource-group <rg> \
+  --cluster-name <cluster> --cluster-type managedClusters \
+  --name <kustomization-name> --flux-configuration-name <config-name> \
+  --path <path-in-repo> --prune true --interval 5m \
+  --depends-on <other-kustomization>
+
+# List Flux configurations
+az k8s-configuration flux list --resource-group <rg> --cluster-name <cluster> \
+  --cluster-type managedClusters -o table
+
+# Show Flux config status (compliance)
+az k8s-configuration flux show --resource-group <rg> --cluster-name <cluster> \
+  --cluster-type managedClusters --name <config-name> \
+  --query "{Compliance:complianceState,Source:sourceKind,URL:gitRepository.url,Branch:gitRepository.repositoryRef.branch}"
+
+# Show kustomization status
+az k8s-configuration flux kustomization show --resource-group <rg> \
+  --cluster-name <cluster> --cluster-type managedClusters \
+  --name <kustomization-name> --flux-configuration-name <config-name>
+
+# Force reconciliation
+az k8s-configuration flux update --resource-group <rg> --cluster-name <cluster> \
+  --cluster-type managedClusters --name <config-name>
+
+# Delete Flux configuration (destructive — confirm with user)
+az k8s-configuration flux delete --resource-group <rg> --cluster-name <cluster> \
+  --cluster-type managedClusters --name <config-name> --yes
+
+# List all k8s extensions (Flux, Azure Policy, etc.)
+az k8s-extension list --resource-group <rg> --cluster-name <cluster> \
+  --cluster-type managedClusters -o table
+```
+
+### Azure AD / Entra ID & Workload Identity
+
+```bash
+# --- Workload Identity Federation (AKS → Azure resources without secrets) ---
+
+# 1. Create managed identity
+az identity create --resource-group <rg> --name <identity>
+CLIENT_ID=$(az identity show -g <rg> -n <identity> --query clientId -o tsv)
+IDENTITY_ID=$(az identity show -g <rg> -n <identity> --query id -o tsv)
+
+# 2. Get AKS OIDC issuer
+OIDC_ISSUER=$(az aks show -g <rg> -n <cluster> --query oidcIssuerProfile.issuerUrl -o tsv)
+
+# 3. Create federated credential (links K8s service account → managed identity)
+az identity federated-credential create --name <fed-cred-name> \
+  --resource-group <rg> --identity-name <identity> \
+  --issuer $OIDC_ISSUER \
+  --subject system:serviceaccount:<namespace>:<service-account-name> \
+  --audiences api://AzureADTokenExchange
+
+# 4. Assign roles to the managed identity
+az role assignment create --assignee $CLIENT_ID \
+  --role "Key Vault Secrets User" --scope <keyvault-resource-id>
+
+# 5. List federated credentials
+az identity federated-credential list --resource-group <rg> --identity-name <identity> -o table
+
+# --- App Registrations ---
+
+# Create app registration
+az ad app create --display-name <app-name>
+APP_ID=$(az ad app list --display-name <app-name> --query "[0].appId" -o tsv)
+
+# Create service principal for app
+az ad sp create --id $APP_ID
+
+# Add client secret (note: prefer federated credentials for workloads)
+az ad app credential reset --id $APP_ID --display-name <secret-name>
+
+# Add API permission
+az ad app permission add --id $APP_ID \
+  --api 00000003-0000-0000-c000-000000000000 \
+  --api-permissions e1fe6dd8-ba31-4d61-89e7-88639da4683d=Scope
+
+# Grant admin consent
+az ad app permission admin-consent --id $APP_ID
+
+# --- Groups & Membership ---
+
+# List groups
+az ad group list --display-name <filter> --query "[].{Name:displayName,ID:id}" -o table
+
+# Show group members
+az ad group member list --group <group-id> --query "[].{Name:displayName,UPN:userPrincipalName}" -o table
+
+# Add member to group
+az ad group member add --group <group-id> --member-id <user-or-sp-object-id>
+
+# Check if user is in a group
+az ad group member check --group <group-id> --member-id <object-id>
+```
+
+### Private Endpoints & Private Link
+
+```bash
+# Create private endpoint for Key Vault
+az network private-endpoint create --resource-group <rg> --name <pe-name> \
+  --vnet-name <vnet> --subnet <subnet> \
+  --private-connection-resource-id <keyvault-resource-id> \
+  --group-id vault --connection-name <connection-name>
+
+# Create private endpoint for Storage
+az network private-endpoint create --resource-group <rg> --name <pe-name> \
+  --vnet-name <vnet> --subnet <subnet> \
+  --private-connection-resource-id <storage-resource-id> \
+  --group-id blob --connection-name <connection-name>
+
+# Create private endpoint for ACR
+az network private-endpoint create --resource-group <rg> --name <pe-name> \
+  --vnet-name <vnet> --subnet <subnet> \
+  --private-connection-resource-id <acr-resource-id> \
+  --group-id registry --connection-name <connection-name>
+
+# Create private endpoint for SQL
+az network private-endpoint create --resource-group <rg> --name <pe-name> \
+  --vnet-name <vnet> --subnet <subnet> \
+  --private-connection-resource-id <sql-server-resource-id> \
+  --group-id sqlServer --connection-name <connection-name>
+
+# Create private DNS zone for the service
+az network private-dns zone create --resource-group <rg> \
+  --name privatelink.vaultcore.azure.net  # Key Vault
+#   --name privatelink.blob.core.windows.net  # Blob
+#   --name privatelink.azurecr.io             # ACR
+#   --name privatelink.database.windows.net   # SQL
+
+# Link private DNS zone to VNet
+az network private-dns link vnet create --resource-group <rg> \
+  --zone-name <private-dns-zone> --name <link-name> \
+  --virtual-network <vnet> --registration-enabled false
+
+# Create DNS zone group (auto-registers A records)
+az network private-endpoint dns-zone-group create --resource-group <rg> \
+  --endpoint-name <pe-name> --name default \
+  --private-dns-zone <private-dns-zone-resource-id> --zone-name <zone>
+
+# List private endpoints
+az network private-endpoint list --resource-group <rg> \
+  --query "[].{Name:name,Subnet:subnet.id,Status:privateLinkServiceConnections[0].privateLinkServiceConnectionState.status}" -o table
+
+# Show private endpoint connection status
+az network private-endpoint show --resource-group <rg> --name <pe-name> \
+  --query "privateLinkServiceConnections[0].privateLinkServiceConnectionState"
+
+# Approve pending private endpoint connection (on the resource side)
+az network private-endpoint-connection approve --id <pe-connection-id>
+
+# Disable public access on Key Vault (force private-only)
+az keyvault update --resource-group <rg> --name <vault> --public-network-access Disabled
+
+# Disable public access on Storage
+az storage account update --resource-group <rg> --name <account> \
+  --default-action Deny --public-network-access Disabled
+
+# Disable public access on ACR
+az acr update --resource-group <rg> --name <registry> --public-network-enabled false
+```
+
+### Bicep & ARM Deployments
+
+```bash
+# --- Bicep ---
+
+# Validate Bicep template
+az deployment group validate --resource-group <rg> \
+  --template-file main.bicep --parameters @params.json
+
+# What-if (preview changes without deploying)
+az deployment group what-if --resource-group <rg> \
+  --template-file main.bicep --parameters @params.json
+
+# Deploy Bicep
+az deployment group create --resource-group <rg> --name <deployment-name> \
+  --template-file main.bicep --parameters @params.json
+
+# Deploy with inline parameter overrides
+az deployment group create --resource-group <rg> --name <deployment-name> \
+  --template-file main.bicep --parameters env=prod sku=Standard_v2
+
+# Subscription-level deployment
+az deployment sub create --location <region> --name <deployment-name> \
+  --template-file main.bicep --parameters @params.json
+
+# Management group-level deployment
+az deployment mg create --management-group-id <mg-id> --location <region> \
+  --template-file main.bicep
+
+# --- Deployment Operations ---
+
+# List deployments
+az deployment group list --resource-group <rg> \
+  --query "[].{Name:name,State:properties.provisioningState,Time:properties.timestamp}" -o table
+
+# Show deployment
+az deployment group show --resource-group <rg> --name <deployment-name>
+
+# Show deployment outputs (connection strings, IDs, etc.)
+az deployment group show --resource-group <rg> --name <deployment-name> \
+  --query properties.outputs
+
+# Show failed operations
+az deployment operation group list --resource-group <rg> --name <deployment-name> \
+  --query "[?properties.provisioningState=='Failed'].{Resource:properties.targetResource.resourceName,Error:properties.statusMessage.error.message}" -o table
+
+# Export existing resource group as ARM/Bicep (reverse-engineer)
+az group export --resource-group <rg> --include-parameter-default-value
+
+# Delete deployment history (keeps resources, clears history)
+az deployment group delete --resource-group <rg> --name <deployment-name>
+
+# --- Template Specs (shareable templates) ---
+
+# Create template spec
+az ts create --resource-group <rg> --name <spec-name> --version 1.0 \
+  --template-file main.bicep
+
+# Deploy from template spec
+az deployment group create --resource-group <rg> \
+  --template-spec <template-spec-resource-id>/versions/1.0
 ```
 
 ### Policy & Governance
 
 ```bash
-# List policy assignments
-az policy assignment list --resource-group <rg> --output table
+# List policy assignments at resource group scope
+az policy assignment list --resource-group <rg> -o table
 
-# Show compliance state
-az policy state summarize --resource-group <rg>
+# List at subscription scope
+az policy assignment list --query "[].{Name:displayName,Enforcement:enforcementMode,Scope:scope}" -o table
+
+# Show compliance state summary
+az policy state summarize --resource-group <rg> \
+  --query "{NonCompliant:results.nonCompliantResources,NonCompliantPolicies:results.nonCompliantPolicies}"
+
+# Detailed non-compliant resources
+az policy state list --resource-group <rg> \
+  --filter "complianceState eq 'NonCompliant'" \
+  --query "[].{Resource:resourceId,Policy:policyDefinitionName,State:complianceState}" -o table
+
+# Trigger policy evaluation (doesn't wait)
+az policy state trigger-scan --resource-group <rg> --no-wait
+
+# Create policy assignment
+az policy assignment create --name <assignment-name> --display-name <display> \
+  --policy <policy-definition-id> --scope <scope> \
+  --params '{"effect":{"value":"Deny"}}'
+
+# Create policy assignment with managed identity (for remediation)
+az policy assignment create --name <assignment-name> \
+  --policy <policy-definition-id> --scope <scope> \
+  --mi-system-assigned --location <region> \
+  --identity-scope <scope> --role Contributor
+
+# --- Policy Remediation ---
+
+# Create remediation task
+az policy remediation create --name <remediation-name> \
+  --resource-group <rg> --policy-assignment <assignment-name>
+
+# Check remediation status
+az policy remediation show --name <remediation-name> --resource-group <rg> \
+  --query "{Status:provisioningState,Succeeded:deploymentStatus.totalDeployments,Failed:deploymentStatus.failedDeployments}"
+
+# List remediations
+az policy remediation list --resource-group <rg> -o table
+
+# Delete remediation
+az policy remediation delete --name <remediation-name> --resource-group <rg>
+
+# --- Resource Locks ---
 
 # List locks
-az lock list --resource-group <rg> --output table
+az lock list --resource-group <rg> -o table
 
-# Create lock
-az lock create --name <lock> --resource-group <rg> --lock-type CanNotDelete
+# Create CanNotDelete lock
+az lock create --name <lock> --resource-group <rg> --lock-type CanNotDelete \
+  --notes "Prevent accidental deletion"
+
+# Create ReadOnly lock (blocks all writes)
+az lock create --name <lock> --resource-group <rg> --lock-type ReadOnly
+
+# Delete lock (destructive — confirm with user)
+az lock delete --name <lock> --resource-group <rg>
+
+# Lock at resource level
+az lock create --name <lock> --resource-group <rg> \
+  --resource-name <resource> --resource-type <type> --lock-type CanNotDelete
+```
+
+### Cost Management
+
+```bash
+# Current month spend by resource group
+az consumption usage list --start-date $(date -u +%Y-%m-01) --end-date $(date -u +%Y-%m-%d) \
+  --query "[].{RG:instanceName,Cost:pretaxCost,Currency:currency}" -o table
+
+# Budget operations
+az consumption budget list -o table
+az consumption budget create --budget-name <budget> --amount <n> \
+  --category Cost --time-grain Monthly --start-date $(date -u +%Y-%m-01) \
+  --end-date $(date -u -d "+1 year" +%Y-%m-01)
+
+# Cost analysis via REST (more powerful)
+az rest --method post \
+  --url "https://management.azure.com/subscriptions/<sub-id>/providers/Microsoft.CostManagement/query?api-version=2023-11-01" \
+  --body '{
+    "type": "ActualCost",
+    "timeframe": "MonthToDate",
+    "dataset": {
+      "granularity": "None",
+      "aggregation": {"totalCost": {"name": "Cost", "function": "Sum"}},
+      "grouping": [{"type": "Dimension", "name": "ResourceGroup"}]
+    }
+  }'
 ```
 
 ## Advanced Patterns
@@ -499,6 +1473,81 @@ az deployment group show --resource-group <rg> --name <deployment> \
 # List deployment operations for details
 az deployment operation group list --resource-group <rg> --name <deployment> \
   --query "[?properties.provisioningState=='Failed']" -o table
+```
+
+### AKS Cluster Issues
+```bash
+# Check cluster provisioning state
+az aks show -g <rg> -n <cluster> --query "{State:provisioningState,Power:powerState.code,FQDN:fqdn}" -o table
+
+# Check node pool health
+az aks nodepool list -g <rg> --cluster-name <cluster> \
+  --query "[].{Name:name,State:provisioningState,Count:count,VMSize:vmSize,Mode:mode}" -o table
+
+# AKS diagnose (built-in diagnostics)
+az aks kollect --resource-group <rg> --name <cluster> \
+  --storage-account <storage> --sas-token <sas>
+
+# Check AKS managed identity permissions
+KUBELET_ID=$(az aks show -g <rg> -n <cluster> --query identityProfile.kubeletidentity.clientId -o tsv)
+az role assignment list --assignee $KUBELET_ID -o table
+
+# AKS API server connectivity (private clusters)
+az aks show -g <rg> -n <cluster> --query "{Private:apiServerAccessProfile.enablePrivateCluster,FQDN:privateFqdn}"
+```
+
+### Monitoring & Observability Issues
+```bash
+# Verify diagnostic settings are enabled on a resource
+az monitor diagnostic-settings list --resource <resource-id> -o table
+
+# Check if Container Insights is enabled on AKS
+az aks show -g <rg> -n <cluster> \
+  --query addonProfiles.omsagent.enabled
+
+# Check Log Analytics agent heartbeat (are logs flowing?)
+az monitor log-analytics query --workspace <workspace-id> --analytics-query "
+Heartbeat
+| where TimeGenerated > ago(30m)
+| summarize LastHeartbeat = max(TimeGenerated) by Computer
+| where LastHeartbeat < ago(10m)
+" -o table
+
+# Check ingestion delays
+az monitor log-analytics query --workspace <workspace-id> --analytics-query "
+union withsource=TableName *
+| where TimeGenerated > ago(1h)
+| summarize IngestionDelay = avg(ingestion_time() - TimeGenerated) by TableName
+| where IngestionDelay > 5m
+| order by IngestionDelay desc
+" -o table
+
+# Verify Application Insights is receiving data
+az monitor app-insights query --app <app-insights> -g <rg> --analytics-query "
+requests
+| where timestamp > ago(30m)
+| summarize Count = count(), AvgDuration = avg(duration) by bin(timestamp, 5m)
+| order by timestamp desc
+"
+```
+
+### Network Connectivity Issues
+```bash
+# Test connectivity between resources
+az network watcher test-connectivity -g <rg> \
+  --source-resource <vm-id> --dest-address <target-ip> --dest-port 443
+
+# Check NSG blocking traffic
+az network nic list-effective-nsg -g <rg> -n <nic-name> \
+  --query "value[].effectiveSecurityRules[?access=='Deny']"
+
+# Verify private endpoint DNS resolution
+az network private-endpoint dns-zone-group list \
+  --resource-group <rg> --endpoint-name <pe-name> -o table
+
+# Check AppGW backend health
+az network application-gateway show-backend-health -g <rg> -n <agw> \
+  --query "backendAddressPools[].backendHttpSettingsCollection[].servers[?health!='Healthy']"
 ```
 
 ## Quick Start Checklist
